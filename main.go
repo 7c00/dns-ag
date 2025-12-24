@@ -246,7 +246,10 @@ func main() {
 		// Check cache first
 		if cachedResp := getFromCache(qName, qType); cachedResp != nil {
 			log.Printf("Using cached response for [%s,%d]", qName, qType)
-			if err := w.WriteMsg(cachedResp); err != nil {
+			msg := new(dns.Msg)
+			msg.SetReply(r)
+			msg.Answer = cachedResp.Answer
+			if err := w.WriteMsg(msg); err != nil {
 				log.Printf("Error writing cached response: %v", err)
 			}
 			return
