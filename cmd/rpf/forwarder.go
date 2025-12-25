@@ -210,10 +210,17 @@ func (f *Forwarder) handleConnection(ctx context.Context, remoteConn net.Conn) {
 		// Context cancelled, close connections to terminate both goroutines
 		localConn.Close()
 		remoteConn.Close()
+
+		// Wait for both copyData goroutines to report completion
+		<-errChan
+		<-errChan
 	case <-errChan:
 		// One direction finished, close connections to terminate the other goroutine
 		localConn.Close()
 		remoteConn.Close()
+
+		// Wait for the remaining copyData goroutine to report completion
+		<-errChan
 	}
 }
 
@@ -239,20 +246,20 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 		// Set a reasonable read deadline to allow periodic context checks
 		src.SetReadDeadline(time.Now().Add(time.Second))
 
-		nr, err := src.Read(buf)
+		nr, readErr := src.Read(buf)
 		if nr > 0 {
-			nw, err := dst.Write(buf[:nr])
+			nw, writeErr := dst.Write(buf[:nr])
 			if nw > 0 {
 				written += int64(nw)
 			}
-			if err != nil {
-				return written, err
+			if writeErr != nil {
+				return written, writeErr
 			}
 			if nr != nw {
-				return written, fmt.Errorf("short write")
+				return written, fmt.Errorf("short write: wrote %d bytes, expected %d", nw, nr)
 			}
 		}
-		if err != nil {
+		if readErr != nil {
 			// Check if context was cancelled
 			select {
 			case <-ctx.Done():
@@ -262,12 +269,12 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 
 			// Ignore timeout errors if context is still active
 			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
+			if errors.As(readErr, &netErr) && netErr.Timeout() {
 				continue
 			}
 
-			if !errors.Is(err, io.EOF) {
-				return written, err
+			if !errors.Is(readErr, io.EOF) {
+				return written, readErr
 			}
 			break
 		}
@@ -276,21 +283,32 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 }
 
 // parseServerAddress parses user@host:port format
+// Note: This function has limitations with IPv6 addresses and special characters.
+// Supported formats:
+//   - host
+//   - host:port
+//   - user@host
+//   - user@host:port
+// IPv6 addresses with brackets are not supported (e.g., [::1]:22)
 func parseServerAddress(addr string) (username, host string, port int) {
-	parts := strings.Split(addr, "@")
-	if len(parts) == 2 {
-		username = parts[0]
-		addr = parts[1]
+	// Extract username if present (before @)
+	atIndex := strings.Index(addr, "@")
+	if atIndex != -1 {
+		username = addr[:atIndex]
+		addr = addr[atIndex+1:]
 	}
 
-	hostParts := strings.Split(addr, ":")
-	if len(hostParts) == 2 {
-		host = hostParts[0]
+	// Extract port if present (after last :)
+	// Note: This will not work correctly for IPv6 addresses without brackets
+	colonIndex := strings.LastIndex(addr, ":")
+	if colonIndex != -1 {
+		host = addr[:colonIndex]
+		portStr := addr[colonIndex+1:]
 		// Default to SSH port 22 in case of parsing errors or invalid values
 		port = 22
-		parsedPort, err := strconv.Atoi(hostParts[1])
+		parsedPort, err := strconv.Atoi(portStr)
 		if err != nil || parsedPort <= 0 || parsedPort > 65535 {
-			log.Printf("invalid port %q in address %q, defaulting to 22", hostParts[1], addr)
+			log.Printf("invalid port %q in address %q, defaulting to 22", portStr, addr)
 		} else {
 			port = parsedPort
 		}
@@ -304,8 +322,9 @@ func parseServerAddress(addr string) (username, host string, port int) {
 		if currentUser, err := user.Current(); err == nil {
 			username = currentUser.Username
 		} else {
-			// Last resort fallback
-			username = "root"
+			// If we can't determine the current user, return empty username
+			// which will cause an error during SSH authentication
+			log.Printf("Warning: could not determine current user for %s, username will be empty", addr)
 		}
 	}
 

@@ -68,6 +68,15 @@ func loadConfig(path string) (*Config, error) {
 
 	// Validate port ranges for all rules (valid ports are 1-65535)
 	for i, rule := range config.Rules {
+		// Validate required fields
+		if rule.Server == "" {
+			return nil, fmt.Errorf("server is required in rule %d", i+1)
+		}
+		if rule.IdentityFile == "" {
+			return nil, fmt.Errorf("identity_file is required in rule %d", i+1)
+		}
+
+		// Validate port ranges
 		if rule.LocalPort < 1 || rule.LocalPort > 65535 {
 			return nil, fmt.Errorf("invalid local_port %d in rule %d: must be between 1 and 65535", rule.LocalPort, i+1)
 		}
