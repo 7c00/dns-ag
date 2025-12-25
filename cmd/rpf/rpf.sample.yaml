@@ -1,0 +1,5 @@
+rules:
+  - server: user@example.com:22
+    local_port: 8080
+    remote_port: 8080
+    identity_file: ~/.ssh/id_rsa
