@@ -45,6 +45,11 @@ func main() {
 		forwarders = append(forwarders, forwarder)
 	}
 
+	if len(forwarders) == 0 {
+		log.Println("No forwarders started successfully")
+		return
+	}
+
 	// Wait for interrupt signal
 	ctx, cancel := context.WithCancel(context.Background())
 	sigChan := make(chan os.Signal, 1)

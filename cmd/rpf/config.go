@@ -66,6 +66,16 @@ func loadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Validate port ranges for all rules (valid ports are 1-65535)
+	for i, rule := range config.Rules {
+		if rule.LocalPort < 1 || rule.LocalPort > 65535 {
+			return nil, fmt.Errorf("invalid local_port %d in rule %d: must be between 1 and 65535", rule.LocalPort, i+1)
+		}
+		if rule.RemotePort < 1 || rule.RemotePort > 65535 {
+			return nil, fmt.Errorf("invalid remote_port %d in rule %d: must be between 1 and 65535", rule.RemotePort, i+1)
+		}
+	}
+
 	return &config, nil
 }
 
