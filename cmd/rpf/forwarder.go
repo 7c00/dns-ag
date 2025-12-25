@@ -21,11 +21,26 @@ const (
 	// copyBufferSize is the buffer size for data copying between connections
 	copyBufferSize = 32 * 1024 // 32KB
 
-	// reconnectDelay is the delay before attempting to reconnect after a connection failure
-	reconnectDelay = 15 * time.Second
+	// reconnectDelayMin is the minimum delay before attempting to reconnect
+	reconnectDelayMin = 5 * time.Second
+
+	// reconnectDelayMax is the maximum delay before attempting to reconnect
+	reconnectDelayMax = 60 * time.Second
+
+	// gracefulReconnectDelay is the delay before reconnecting after a graceful disconnection
+	gracefulReconnectDelay = time.Second
 
 	// sshTimeout is the timeout for establishing SSH connections
 	sshTimeout = 30 * time.Second
+
+	// localDialTimeout is the timeout for connecting to local services
+	localDialTimeout = 10 * time.Second
+
+	// readDeadlineInterval is the read deadline for context-aware copy operations
+	readDeadlineInterval = 10 * time.Second
+
+	// gracefulShutdownTimeout is the timeout for waiting for active connections to complete during shutdown
+	gracefulShutdownTimeout = 5 * time.Second
 )
 
 // Forwarder manages a single SSH port forwarding connection
@@ -35,6 +50,7 @@ type Forwarder struct {
 	clientLock sync.Mutex
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
+	activeConns sync.WaitGroup // Track active connections for graceful shutdown
 }
 
 // Start establishes the SSH connection and starts port forwarding
@@ -53,6 +69,22 @@ func (f *Forwarder) Stop() {
 	if f.cancel != nil {
 		f.cancel()
 	}
+	
+	// Wait for active connections to complete with timeout
+	done := make(chan struct{})
+	go func() {
+		f.activeConns.Wait()
+		close(done)
+	}()
+	
+	select {
+	case <-done:
+		// All connections completed gracefully
+	case <-time.After(gracefulShutdownTimeout):
+		// Timeout waiting for connections, force close
+		log.Printf("Timeout waiting for connections to %s to complete, forcing shutdown", f.rule.Server)
+	}
+	
 	f.clientLock.Lock()
 	defer f.clientLock.Unlock()
 	if f.client != nil {
@@ -61,10 +93,11 @@ func (f *Forwarder) Stop() {
 	}
 }
 
-// run manages the SSH connection with auto-reconnect
+// run manages the SSH connection with auto-reconnect and exponential backoff
 func (f *Forwarder) run(ctx context.Context) {
 	defer f.wg.Done()
 
+	delay := reconnectDelayMin
 	for {
 		select {
 		case <-ctx.Done():
@@ -72,16 +105,36 @@ func (f *Forwarder) run(ctx context.Context) {
 		default:
 		}
 
-		if err := f.connectAndForward(ctx); err != nil {
+		err := f.connectAndForward(ctx)
+		if err != nil {
 			log.Printf("Connection to %s failed: %v", f.rule.Server, err)
-		}
-
-		// Wait before reconnecting or check for cancellation
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(reconnectDelay):
-			log.Printf("Reconnecting to %s...", f.rule.Server)
+			// Exponential backoff: double the delay on failure, up to max
+			nextDelay := delay * 2
+			if nextDelay > reconnectDelayMax {
+				nextDelay = reconnectDelayMax
+			}
+			
+			log.Printf("Reconnecting to %s in %v...", f.rule.Server, delay)
+			
+			// Wait before reconnecting or check for cancellation
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+				delay = nextDelay
+			}
+		} else {
+			// Connection was successful and then disconnected gracefully
+			// Reset delay for next reconnection and use brief pause
+			delay = reconnectDelayMin
+			log.Printf("Reconnecting to %s in %v...", f.rule.Server, gracefulReconnectDelay)
+			
+			// Brief pause before reconnecting (shorter than minimum to avoid unnecessary delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(gracefulReconnectDelay):
+			}
 		}
 	}
 }
@@ -181,8 +234,11 @@ func (f *Forwarder) handleConnection(ctx context.Context, remoteConn net.Conn) {
 	defer f.wg.Done()
 	defer remoteConn.Close()
 
-	// Connect to local service
-	localConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", f.rule.LocalPort))
+	f.activeConns.Add(1)
+	defer f.activeConns.Done()
+
+	// Connect to local service with timeout
+	localConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", f.rule.LocalPort), localDialTimeout)
 	if err != nil {
 		log.Printf("Failed to connect to local port %d: %v", f.rule.LocalPort, err)
 		return
@@ -194,23 +250,13 @@ func (f *Forwarder) handleConnection(ctx context.Context, remoteConn net.Conn) {
 
 	// Remote -> Local
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				errChan <- fmt.Errorf("panic in copyData: %v", r)
-			}
-		}()
-		_, err := copyData(ctx, localConn, remoteConn)
+		_, err := copyWithContext(ctx, localConn, remoteConn)
 		errChan <- err
 	}()
 
 	// Local -> Remote
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				errChan <- fmt.Errorf("panic in copyData: %v", r)
-			}
-		}()
-		_, err := copyData(ctx, remoteConn, localConn)
+		_, err := copyWithContext(ctx, remoteConn, localConn)
 		errChan <- err
 	}()
 
@@ -221,7 +267,7 @@ func (f *Forwarder) handleConnection(ctx context.Context, remoteConn net.Conn) {
 		localConn.Close()
 		remoteConn.Close()
 
-		// Wait for both copyData goroutines to report completion
+		// Wait for both copyWithContext goroutines to report completion
 		<-errChan
 		<-errChan
 	case <-errChan:
@@ -229,13 +275,13 @@ func (f *Forwarder) handleConnection(ctx context.Context, remoteConn net.Conn) {
 		localConn.Close()
 		remoteConn.Close()
 
-		// Wait for the remaining copyData goroutine to report completion
+		// Wait for the remaining copyWithContext goroutine to report completion
 		<-errChan
 	}
 }
 
-// copyData copies data between connections with context awareness
-func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
+// copyWithContext copies data between connections with context awareness
+func copyWithContext(ctx context.Context, dst, src net.Conn) (int64, error) {
 	var written int64
 	buf := make([]byte, copyBufferSize)
 
@@ -253,8 +299,8 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 	}()
 
 	for {
-		// Set a reasonable read deadline to allow periodic context checks
-		src.SetReadDeadline(time.Now().Add(time.Second))
+		// Set a reasonable read deadline to allow periodic context checks without excessive overhead
+		src.SetReadDeadline(time.Now().Add(readDeadlineInterval))
 
 		nr, readErr := src.Read(buf)
 		if nr > 0 {
