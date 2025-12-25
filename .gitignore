@@ -1,3 +1,7 @@
+.clinerules/
 .vscode/
+build/
 *.log
 dns-ag
+*.yaml
+!*.sample.yaml
