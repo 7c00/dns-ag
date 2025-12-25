@@ -76,6 +76,12 @@ func loadConfig(path string) (*Config, error) {
 			return nil, fmt.Errorf("identity_file is required in rule %d", i+1)
 		}
 
+		// Validate that the identity file exists and is accessible
+		identityPath := expandHomeDir(rule.IdentityFile)
+		if _, err := os.Stat(identityPath); err != nil {
+			return nil, fmt.Errorf("identity_file %q in rule %d is not accessible: %v", rule.IdentityFile, i+1, err)
+		}
+
 		// Validate port ranges
 		if rule.LocalPort < 1 || rule.LocalPort > 65535 {
 			return nil, fmt.Errorf("invalid local_port %d in rule %d: must be between 1 and 65535", rule.LocalPort, i+1)
@@ -90,7 +96,12 @@ func loadConfig(path string) (*Config, error) {
 
 // expandHomeDir expands the tilde (~) in a path to the user's home directory
 func expandHomeDir(path string) string {
-	if strings.HasPrefix(path, "~/") {
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return home
+		}
+	} else if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err == nil {
 			return filepath.Join(home, path[2:])

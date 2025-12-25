@@ -38,7 +38,7 @@ func main() {
 		forwarder := &Forwarder{rule: fw}
 
 		if err := forwarder.Start(); err != nil {
-			log.Printf("[%d] Failed to start: %v", i+1, err)
+			log.Printf("[%d] Failed to start %s (local:%d -> remote:%d): %v", i+1, fw.Server, fw.LocalPort, fw.RemotePort, err)
 			continue
 		}
 

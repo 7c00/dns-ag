@@ -1,7 +1,7 @@
 # Makefile
 
 rpf:
-	go build -o build/rpf cmd/rpf/*.go
+	go build -o build/rpf ./cmd/rpf
 
 rpf-run: rpf
 	@if [ ! -f etc/rpf.yaml ]; then \
