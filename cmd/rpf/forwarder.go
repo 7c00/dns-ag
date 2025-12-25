@@ -99,20 +99,32 @@ func (f *Forwarder) run(ctx context.Context) {
 		default:
 		}
 
-		if err := f.connectAndForward(ctx); err != nil {
+		err := f.connectAndForward(ctx)
+		if err != nil {
 			log.Printf("Connection to %s failed: %v", f.rule.Server, err)
-		}
-
-		// Wait before reconnecting or check for cancellation
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(delay):
-			log.Printf("Reconnecting to %s...", f.rule.Server)
-			// Exponential backoff: double the delay, up to max
-			delay *= 2
-			if delay > reconnectDelayMax {
-				delay = reconnectDelayMax
+			// Wait before reconnecting or check for cancellation
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+				log.Printf("Reconnecting to %s...", f.rule.Server)
+				// Exponential backoff: double the delay on failure, up to max
+				delay *= 2
+				if delay > reconnectDelayMax {
+					delay = reconnectDelayMax
+				}
+			}
+		} else {
+			// Connection was successful and then disconnected gracefully
+			// Reset delay for next reconnection
+			delay = reconnectDelayMin
+			
+			// Brief pause before reconnecting
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(reconnectDelayMin):
+				log.Printf("Reconnecting to %s...", f.rule.Server)
 			}
 		}
 	}

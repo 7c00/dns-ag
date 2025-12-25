@@ -96,16 +96,17 @@ func loadConfig(path string) (*Config, error) {
 
 // expandHomeDir expands the tilde (~) in a path to the user's home directory
 func expandHomeDir(path string) string {
-	if path == "~" {
+	if path == "~" || strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
-		if err == nil {
+		if err != nil {
+			// If we can't get the home directory, return the path unchanged
+			// This will likely fail later validation, which is appropriate
+			return path
+		}
+		if path == "~" {
 			return home
 		}
-	} else if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			return filepath.Join(home, path[2:])
-		}
+		return filepath.Join(home, path[2:])
 	}
 	return path
 }
