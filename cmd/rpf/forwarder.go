@@ -230,7 +230,7 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 		select {
 		case <-ctx.Done():
 			// Set a very short deadline to interrupt any blocked Read
-			src.SetReadDeadline(time.Now())
+			src.SetReadDeadline(time.Now().Add(time.Millisecond))
 		case <-done:
 		}
 	}()
@@ -261,7 +261,8 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 			}
 
 			// Ignore timeout errors if context is still active
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
 				continue
 			}
 
