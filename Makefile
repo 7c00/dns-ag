@@ -1,22 +1,21 @@
 # Makefile
 
-rpf:
-	go build -o build/rpf ./cmd/rpf
+PROJECT := dns-ag
+CMDS := nsd rpf
 
-rpf-run: rpf
-	@if [ ! -f etc/rpf.yaml ]; then \
-		echo "Warning: etc/rpf.yaml not found, using sample config"; \
-		cp cmd/rpf/rpf.sample.yaml etc/rpf.yaml; \
-	fi
-	build/rpf etc/rpf.yaml
+.PHONY: build-all $(addprefix build-,$(CMDS)) $(addprefix run-,$(CMDS)) $(addprefix install-,$(CMDS))
 
-rpf-install: rpf
-	install -m 755 build/rpf ~/.local/bin/rpf
-	@mkdir -p ~/.config/rpf
-	@if [ -f etc/rpf.yaml ]; then \
-		install -m 644 etc/rpf.yaml ~/.config/rpf/rpf.yaml; \
-	else \
-		install -m 644 cmd/rpf/rpf.sample.yaml ~/.config/rpf/rpf.yaml; \
-	fi
+build-all: $(addprefix build-,$(CMDS))
 
-.PHONY: rpf rpf-run rpf-install
+$(addprefix build-,$(CMDS)): build-%:
+	go build -o build/$* ./cmd/$*/*.go
+
+$(addprefix run-,$(CMDS)): run-%: build-%
+	touch etc/$*.yaml
+	build/$* etc/$*.yaml
+
+$(addprefix install-,$(CMDS)): install-%: build-%
+	@mkdir -p ~/.local/share/$(PROJECT)
+	install -m 755 build/$* ~/.local/share/$(PROJECT)/$*
+	@mkdir -p ~/.config/$(PROJECT)
+	install -m 644 etc/$*.yaml ~/.config/$(PROJECT)/$*.yaml
