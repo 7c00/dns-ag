@@ -194,12 +194,22 @@ func (f *Forwarder) handleConnection(ctx context.Context, remoteConn net.Conn) {
 
 	// Remote -> Local
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				errChan <- fmt.Errorf("panic in copyData: %v", r)
+			}
+		}()
 		_, err := copyData(ctx, localConn, remoteConn)
 		errChan <- err
 	}()
 
 	// Local -> Remote
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				errChan <- fmt.Errorf("panic in copyData: %v", r)
+			}
+		}()
 		_, err := copyData(ctx, remoteConn, localConn)
 		errChan <- err
 	}()
