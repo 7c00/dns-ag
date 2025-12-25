@@ -27,6 +27,9 @@ const (
 	// reconnectDelayMax is the maximum delay before attempting to reconnect
 	reconnectDelayMax = 60 * time.Second
 
+	// gracefulReconnectDelay is the delay before reconnecting after a graceful disconnection
+	gracefulReconnectDelay = time.Second
+
 	// sshTimeout is the timeout for establishing SSH connections
 	sshTimeout = 30 * time.Second
 
@@ -35,6 +38,9 @@ const (
 
 	// readDeadlineInterval is the read deadline for context-aware copy operations
 	readDeadlineInterval = 10 * time.Second
+
+	// gracefulShutdownTimeout is the timeout for waiting for active connections to complete during shutdown
+	gracefulShutdownTimeout = 5 * time.Second
 )
 
 // Forwarder manages a single SSH port forwarding connection
@@ -74,7 +80,7 @@ func (f *Forwarder) Stop() {
 	select {
 	case <-done:
 		// All connections completed gracefully
-	case <-time.After(5 * time.Second):
+	case <-time.After(gracefulShutdownTimeout):
 		// Timeout waiting for connections, force close
 		log.Printf("Timeout waiting for connections to %s to complete, forcing shutdown", f.rule.Server)
 	}
@@ -121,13 +127,13 @@ func (f *Forwarder) run(ctx context.Context) {
 			// Connection was successful and then disconnected gracefully
 			// Reset delay for next reconnection and use brief pause
 			delay = reconnectDelayMin
-			log.Printf("Reconnecting to %s in %v...", f.rule.Server, time.Second)
+			log.Printf("Reconnecting to %s in %v...", f.rule.Server, gracefulReconnectDelay)
 			
 			// Brief pause before reconnecting (shorter than minimum to avoid unnecessary delay)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(time.Second):
+			case <-time.After(gracefulReconnectDelay):
 			}
 		}
 	}
