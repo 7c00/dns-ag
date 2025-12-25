@@ -366,7 +366,7 @@ func parseServerAddress(addr string) (username, host string, port int) {
 		port = 22
 		parsedPort, err := strconv.Atoi(portStr)
 		if err != nil || parsedPort <= 0 || parsedPort > 65535 {
-			log.Printf("invalid port %q in address %q, defaulting to 22", portStr, originalAddr)
+			log.Printf("ERROR: invalid port %q in address %q; using default SSH port 22 instead", portStr, originalAddr)
 		} else {
 			port = parsedPort
 		}
