@@ -291,6 +291,8 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 //   - user@host:port
 // IPv6 addresses with brackets are not supported (e.g., [::1]:22)
 func parseServerAddress(addr string) (username, host string, port int) {
+	originalAddr := addr // Preserve original address for error messages
+
 	// Extract username if present (before @)
 	atIndex := strings.Index(addr, "@")
 	if atIndex != -1 {
@@ -308,7 +310,7 @@ func parseServerAddress(addr string) (username, host string, port int) {
 		port = 22
 		parsedPort, err := strconv.Atoi(portStr)
 		if err != nil || parsedPort <= 0 || parsedPort > 65535 {
-			log.Printf("invalid port %q in address %q, defaulting to 22", portStr, addr)
+			log.Printf("invalid port %q in address %q, defaulting to 22", portStr, originalAddr)
 		} else {
 			port = parsedPort
 		}
@@ -324,7 +326,7 @@ func parseServerAddress(addr string) (username, host string, port int) {
 		} else {
 			// If we can't determine the current user, return empty username
 			// which will cause an error during SSH authentication
-			log.Printf("Warning: could not determine current user for %s, username will be empty", addr)
+			log.Printf("Warning: could not determine current user for %s, username will be empty", originalAddr)
 		}
 	}
 
