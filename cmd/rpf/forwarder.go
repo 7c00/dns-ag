@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/user"
 	"strconv"
 	"strings"
 	"sync"
@@ -136,7 +137,13 @@ func (f *Forwarder) connectAndForward(ctx context.Context) error {
 		f.rule.RemotePort, f.rule.LocalPort)
 
 	// Accept connections
-	defer listener.Close()
+	var listenerCloseOnce sync.Once
+	closeListener := func() {
+		listenerCloseOnce.Do(func() {
+			listener.Close()
+		})
+	}
+	defer closeListener()
 
 	acceptChan := make(chan error, 1)
 
@@ -145,7 +152,7 @@ func (f *Forwarder) connectAndForward(ctx context.Context) error {
 			remoteConn, err := listener.Accept()
 			if err != nil {
 				// Close the listener on accept error to ensure prompt cleanup
-				listener.Close()
+				closeListener()
 				acceptChan <- err
 				return
 			}
@@ -235,13 +242,11 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 }
 
 // parseServerAddress parses user@host:port format
-func parseServerAddress(addr string) (user, host string, port int) {
+func parseServerAddress(addr string) (username, host string, port int) {
 	parts := strings.Split(addr, "@")
 	if len(parts) == 2 {
-		user = parts[0]
+		username = parts[0]
 		addr = parts[1]
-	} else {
-		user = os.Getenv("USER")
 	}
 
 	hostParts := strings.Split(addr, ":")
@@ -260,11 +265,13 @@ func parseServerAddress(addr string) (user, host string, port int) {
 		port = 22
 	}
 
-	if user == "" {
+	if username == "" {
 		// Use current system user as fallback
-		user = os.Getenv("USER")
-		if user == "" {
-			user = "root"
+		if currentUser, err := user.Current(); err == nil {
+			username = currentUser.Username
+		} else {
+			// Last resort fallback
+			username = "root"
 		}
 	}
 
