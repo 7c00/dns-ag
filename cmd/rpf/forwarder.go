@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
+	"os/user"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -13,12 +17,24 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+const (
+	// copyBufferSize is the buffer size for data copying between connections
+	copyBufferSize = 32 * 1024 // 32KB
+
+	// reconnectDelay is the delay before attempting to reconnect after a connection failure
+	reconnectDelay = 15 * time.Second
+
+	// sshTimeout is the timeout for establishing SSH connections
+	sshTimeout = 30 * time.Second
+)
+
 // Forwarder manages a single SSH port forwarding connection
 type Forwarder struct {
-	rule   Rule
-	client *ssh.Client
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	rule       Rule
+	client     *ssh.Client
+	clientLock sync.Mutex
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
 }
 
 // Start establishes the SSH connection and starts port forwarding
@@ -37,16 +53,17 @@ func (f *Forwarder) Stop() {
 	if f.cancel != nil {
 		f.cancel()
 	}
+	f.clientLock.Lock()
+	defer f.clientLock.Unlock()
 	if f.client != nil {
 		f.client.Close()
+		f.client = nil
 	}
 }
 
 // run manages the SSH connection with auto-reconnect
 func (f *Forwarder) run(ctx context.Context) {
 	defer f.wg.Done()
-
-	reconnectDelay := 15 * time.Second
 
 	for {
 		select {
@@ -75,10 +92,14 @@ func (f *Forwarder) connectAndForward(ctx context.Context) error {
 	user, host, port := parseServerAddress(f.rule.Server)
 
 	// SSH client config
+	// WARNING: Using InsecureIgnoreHostKey() disables host key verification,
+	// making the connection vulnerable to man-in-the-middle attacks.
+	// For production use, consider implementing proper host key verification
+	// using ssh.FixedHostKey() or knownhosts.New() from golang.org/x/crypto/ssh/knownhosts
 	sshConfig := &ssh.ClientConfig{
 		User:            user,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         30 * time.Second,
+		Timeout:         sshTimeout,
 	}
 
 	// Require identity_file for authentication
@@ -98,7 +119,10 @@ func (f *Forwarder) connectAndForward(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to dial SSH: %w", err)
 	}
+
+	f.clientLock.Lock()
 	f.client = client
+	f.clientLock.Unlock()
 
 	log.Printf("Connected to %s", f.rule.Server)
 
@@ -109,11 +133,17 @@ func (f *Forwarder) connectAndForward(ctx context.Context) error {
 		return fmt.Errorf("failed to listen on remote port: %w", err)
 	}
 
-	log.Printf("Remote port forwarding established: 127.0.0.1:%d -> 127.0.0.1:%d",
+	log.Printf("Remote port forwarding established: connections to remote 127.0.0.1:%d will be forwarded to local 127.0.0.1:%d",
 		f.rule.RemotePort, f.rule.LocalPort)
 
 	// Accept connections
-	defer listener.Close()
+	var listenerCloseOnce sync.Once
+	closeListener := func() {
+		listenerCloseOnce.Do(func() {
+			listener.Close()
+		})
+	}
+	defer closeListener()
 
 	acceptChan := make(chan error, 1)
 
@@ -121,6 +151,8 @@ func (f *Forwarder) connectAndForward(ctx context.Context) error {
 		for {
 			remoteConn, err := listener.Accept()
 			if err != nil {
+				// Close the listener on accept error to ensure prompt cleanup
+				closeListener()
 				acceptChan <- err
 				return
 			}
@@ -177,7 +209,7 @@ func (f *Forwarder) handleConnection(ctx context.Context, remoteConn net.Conn) {
 // copyData copies data between connections with context awareness
 func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 	var written int64
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, copyBufferSize)
 
 	for {
 		select {
@@ -200,7 +232,7 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 			}
 		}
 		if err != nil {
-			if err.Error() != "EOF" {
+			if !errors.Is(err, io.EOF) {
 				return written, err
 			}
 			break
@@ -210,26 +242,37 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 }
 
 // parseServerAddress parses user@host:port format
-func parseServerAddress(addr string) (user, host string, port int) {
+func parseServerAddress(addr string) (username, host string, port int) {
 	parts := strings.Split(addr, "@")
 	if len(parts) == 2 {
-		user = parts[0]
+		username = parts[0]
 		addr = parts[1]
-	} else {
-		user = os.Getenv("USER")
 	}
 
 	hostParts := strings.Split(addr, ":")
 	if len(hostParts) == 2 {
 		host = hostParts[0]
-		fmt.Sscanf(hostParts[1], "%d", &port)
+		// Default to SSH port 22 in case of parsing errors or invalid values
+		port = 22
+		parsedPort, err := strconv.Atoi(hostParts[1])
+		if err != nil || parsedPort <= 0 {
+			log.Printf("invalid port %q in address %q, defaulting to 22", hostParts[1], addr)
+		} else {
+			port = parsedPort
+		}
 	} else {
 		host = addr
 		port = 22
 	}
 
-	if user == "" {
-		user = "root"
+	if username == "" {
+		// Use current system user as fallback
+		if currentUser, err := user.Current(); err == nil {
+			username = currentUser.Username
+		} else {
+			// Last resort fallback
+			username = "root"
+		}
 	}
 
 	return
@@ -244,7 +287,12 @@ func getPublicKeyAuth(keyPath string) (ssh.AuthMethod, error) {
 	}
 	signer, err := ssh.ParsePrivateKey(key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse private key: %w", err)
+		// ssh.ParsePrivateKey does not support encrypted private keys.
+		// Provide a clearer error message if the key appears to be encrypted.
+		if strings.Contains(err.Error(), "encrypted") || strings.Contains(err.Error(), "passphrase") {
+			return nil, fmt.Errorf("failed to parse private key %s: key appears to be encrypted; only unencrypted private keys are supported: %w", expandedPath, err)
+		}
+		return nil, fmt.Errorf("failed to parse private key %s: %w", expandedPath, err)
 	}
 	return ssh.PublicKeys(signer), nil
 }

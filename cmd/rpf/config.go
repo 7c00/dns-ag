@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -70,7 +71,7 @@ func loadConfig(path string) (*Config, error) {
 
 // expandHomeDir expands the tilde (~) in a path to the user's home directory
 func expandHomeDir(path string) string {
-	if filepath.HasPrefix(path, "~/") {
+	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err == nil {
 			return filepath.Join(home, path[2:])

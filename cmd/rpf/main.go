@@ -36,12 +36,13 @@ func main() {
 		log.Printf("[%d] Setting up %s: local:%d -> remote:%d",
 			i+1, fw.Server, fw.LocalPort, fw.RemotePort)
 		forwarder := &Forwarder{rule: fw}
-		forwarders = append(forwarders, forwarder)
 
 		if err := forwarder.Start(); err != nil {
 			log.Printf("[%d] Failed to start: %v", i+1, err)
 			continue
 		}
+
+		forwarders = append(forwarders, forwarder)
 	}
 
 	// Wait for interrupt signal
