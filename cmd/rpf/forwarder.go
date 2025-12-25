@@ -129,6 +129,11 @@ func (f *Forwarder) connectAndForward(ctx context.Context) error {
 	// Listen on remote server
 	listener, err := client.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", f.rule.RemotePort))
 	if err != nil {
+		f.clientLock.Lock()
+		if f.client == client {
+			f.client = nil
+		}
+		f.clientLock.Unlock()
 		client.Close()
 		return fmt.Errorf("failed to listen on remote port: %w", err)
 	}
@@ -199,10 +204,16 @@ func (f *Forwarder) handleConnection(ctx context.Context, remoteConn net.Conn) {
 		errChan <- err
 	}()
 
-	// Wait for either direction to finish
+	// Wait for either direction to finish or context cancellation
 	select {
 	case <-ctx.Done():
+		// Context cancelled, close connections to terminate both goroutines
+		localConn.Close()
+		remoteConn.Close()
 	case <-errChan:
+		// One direction finished, close connections to terminate the other goroutine
+		localConn.Close()
+		remoteConn.Close()
 	}
 }
 
@@ -211,12 +222,22 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 	var written int64
 	buf := make([]byte, copyBufferSize)
 
-	for {
+	// Set up a goroutine to cancel reads when context is done
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
 		select {
 		case <-ctx.Done():
-			return written, ctx.Err()
-		default:
+			// Set a very short deadline to interrupt any blocked Read
+			src.SetReadDeadline(time.Now().Add(time.Millisecond))
+		case <-done:
 		}
+	}()
+
+	for {
+		// Set a reasonable read deadline to allow periodic context checks
+		src.SetReadDeadline(time.Now().Add(time.Second))
 
 		nr, err := src.Read(buf)
 		if nr > 0 {
@@ -232,6 +253,19 @@ func copyData(ctx context.Context, dst, src net.Conn) (int64, error) {
 			}
 		}
 		if err != nil {
+			// Check if context was cancelled
+			select {
+			case <-ctx.Done():
+				return written, ctx.Err()
+			default:
+			}
+
+			// Ignore timeout errors if context is still active
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				continue
+			}
+
 			if !errors.Is(err, io.EOF) {
 				return written, err
 			}
@@ -255,7 +289,7 @@ func parseServerAddress(addr string) (username, host string, port int) {
 		// Default to SSH port 22 in case of parsing errors or invalid values
 		port = 22
 		parsedPort, err := strconv.Atoi(hostParts[1])
-		if err != nil || parsedPort <= 0 {
+		if err != nil || parsedPort <= 0 || parsedPort > 65535 {
 			log.Printf("invalid port %q in address %q, defaulting to 22", hostParts[1], addr)
 		} else {
 			port = parsedPort
