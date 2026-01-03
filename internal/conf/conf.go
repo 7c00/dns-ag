@@ -27,13 +27,26 @@ func GetConfigFile() (string, error) {
 	if len(os.Args) > 1 {
 		// Find the first non-flag argument
 		var firstArg string
+		skipNext := false
 		for _, arg := range os.Args[1:] {
-			if !strings.HasPrefix(arg, "-") {
-				firstArg = arg
-				break
+			if skipNext {
+				skipNext = false
+				continue
 			}
+			// Skip flags (e.g., -h, --help, -f, --file)
+			if strings.HasPrefix(arg, "-") {
+				// Check if this flag might have a value
+				// Flags in the form "-f=value" or "--file=value" are self-contained
+				// Flags in the form "-f value" require skipping the next argument
+				if !strings.Contains(arg, "=") {
+					skipNext = true
+				}
+				continue
+			}
+			firstArg = arg
+			break
 		}
-		
+
 		if firstArg != "" {
 			if _, err := os.Stat(firstArg); err == nil {
 				return firstArg, nil
