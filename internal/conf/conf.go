@@ -7,11 +7,14 @@ import (
 	"strings"
 )
 
-// GetConfigFile searches for the configuration file in order of priority:
-// 1. Command line argument (if provided)
-// 2. ./EXEC.yaml (current directory, where EXEC is the binary name)
-// 3. <binary_dir>/EXEC.yaml (directory where the executable is located)
-// Returns the path to the first existing config file, or an error if none found
+// GetConfigFile locates the configuration file using the following rules:
+// 1. If a command-line argument is provided, it is treated as an explicit config
+//    path that must exist. If that file does not exist, an error is returned
+//    immediately and no other locations are searched.
+// 2. If no command-line argument is provided, ./EXEC.yaml is checked (current
+//    directory, where EXEC is the binary name), then <binary_dir>/EXEC.yaml
+//    (directory where the executable is located). If none of these files exist,
+//    an error is returned.
 func GetConfigFile() (string, error) {
 	// Get the executable name (without extension)
 	execName := filepath.Base(os.Args[0])
@@ -19,14 +22,20 @@ func GetConfigFile() (string, error) {
 	execName = strings.TrimSuffix(execName, ".exe")
 	configFileName := execName + ".yaml"
 
-	// Priority 1: Command line argument
+	// Priority 1: Command line argument (first non-flag argument)
 	if len(os.Args) > 1 {
-		configPath := os.Args[1]
-		if _, err := os.Stat(configPath); err == nil {
-			return configPath, nil
+		for _, arg := range os.Args[1:] {
+			// Skip flag-like arguments (e.g., -h, --help)
+			if strings.HasPrefix(arg, "-") {
+				continue
+			}
+			configPath := arg
+			if _, err := os.Stat(configPath); err == nil {
+				return configPath, nil
+			}
+			// If a config path is specified but doesn't exist, return error
+			return "", fmt.Errorf("specified config file not found: %s", configPath)
 		}
-		// If specified but doesn't exist, return error
-		return "", fmt.Errorf("specified config file not found: %s", configPath)
 	}
 
 	// Priority 2: Current directory
@@ -46,5 +55,5 @@ func GetConfigFile() (string, error) {
 	}
 
 	// No config file found
-	return "", fmt.Errorf("no config file found. Searched: [command line arg], ./%s, <exec_dir>/%s", configFileName, configFileName)
+	return "", fmt.Errorf("no config file found. Searched: ./%s, <exec_dir>/%s", configFileName, configFileName)
 }
