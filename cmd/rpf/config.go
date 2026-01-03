@@ -22,38 +22,6 @@ type Config struct {
 	Rules []Rule `yaml:"rules"`
 }
 
-// findConfigFile searches for the configuration file in order of priority:
-// 1. Command line argument (if provided)
-// 2. ./rpf.yaml (current directory)
-// 3. ~/.config/rpf/rpf.yaml (user config directory)
-// Returns the path to the first existing config file, or an error if none found
-func findConfigFile() (string, error) {
-	// Priority 1: Command line argument
-	if len(os.Args) > 1 {
-		configPath := os.Args[1]
-		if _, err := os.Stat(configPath); err == nil {
-			return configPath, nil
-		}
-		// If specified but doesn't exist, return error
-		return "", fmt.Errorf("specified config file not found: %s", configPath)
-	}
-
-	// Priority 2: Current directory
-	currentDirConfig := "rpf.yaml"
-	if _, err := os.Stat(currentDirConfig); err == nil {
-		return currentDirConfig, nil
-	}
-
-	// Priority 3: ~/.config/rpf/rpf.yaml
-	userConfigPath := expandHomeDir("~/.config/rpf/rpf.yaml")
-	if _, err := os.Stat(userConfigPath); err == nil {
-		return userConfigPath, nil
-	}
-
-	// No config file found
-	return "", fmt.Errorf("no config file found. Searched: [command line arg], ./rpf.yaml, ~/.config/rpf/rpf.yaml")
-}
-
 // loadConfig reads and parses the YAML configuration file
 func loadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)

@@ -17,5 +17,4 @@ $(addprefix run-,$(CMDS)): run-%: build-%
 $(addprefix install-,$(CMDS)): install-%: build-%
 	@mkdir -p ~/.local/share/$(PROJECT)
 	install -m 755 build/$* ~/.local/share/$(PROJECT)/$*
-	@mkdir -p ~/.config/$(PROJECT)
-	install -m 644 etc/$*.yaml ~/.config/$(PROJECT)/$*.yaml
+	install -m 644 etc/$*.yaml ~/.local/share/$(PROJECT)/$*.yaml

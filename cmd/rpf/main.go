@@ -6,11 +6,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/7c00/dns-ag/internal/conf"
 )
 
 func main() {
 	// Find config file with priority order
-	configPath, err := findConfigFile()
+	configPath, err := conf.GetConfigFile()
 	if err != nil {
 		log.Fatalf("Failed to find config file: %v", err)
 	}
