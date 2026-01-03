@@ -16,25 +16,43 @@ import (
 //    (directory where the executable is located). If none of these files exist,
 //    an error is returned.
 func GetConfigFile() (string, error) {
-	// Get the executable name (without extension)
+	// Get the executable name from the invocation path (without extension)
 	execName := filepath.Base(os.Args[0])
 	// Remove .exe extension on Windows
 	execName = strings.TrimSuffix(execName, ".exe")
 	configFileName := execName + ".yaml"
 
 	// Priority 1: Command line argument (first non-flag argument)
+	// If provided, it is treated as an explicit config path that must exist
 	if len(os.Args) > 1 {
+		// Find the first non-flag argument
+		var firstArg string
+		skipNext := false
 		for _, arg := range os.Args[1:] {
-			// Skip flag-like arguments (e.g., -h, --help)
-			if strings.HasPrefix(arg, "-") {
+			if skipNext {
+				skipNext = false
 				continue
 			}
-			configPath := arg
-			if _, err := os.Stat(configPath); err == nil {
-				return configPath, nil
+			// Skip flags (e.g., -h, --help, -f, --file)
+			if strings.HasPrefix(arg, "-") {
+				// Check if this flag might have a value
+				// Flags in the form "-f=value" or "--file=value" are self-contained
+				// Flags in the form "-f value" require skipping the next argument
+				if !strings.Contains(arg, "=") {
+					skipNext = true
+				}
+				continue
+			}
+			firstArg = arg
+			break
+		}
+
+		if firstArg != "" {
+			if _, err := os.Stat(firstArg); err == nil {
+				return firstArg, nil
 			}
 			// If a config path is specified but doesn't exist, return error
-			return "", fmt.Errorf("specified config file not found: %s", configPath)
+			return "", fmt.Errorf("specified config file not found: %s", firstArg)
 		}
 	}
 
@@ -46,14 +64,16 @@ func GetConfigFile() (string, error) {
 
 	// Priority 3: Directory where the executable is located
 	execPath, err := os.Executable()
-	if err == nil {
-		execDir := filepath.Dir(execPath)
-		execDirConfig := filepath.Join(execDir, configFileName)
-		if _, err := os.Stat(execDirConfig); err == nil {
-			return execDirConfig, nil
-		}
+	if err != nil {
+		// If we can't determine the executable path, return error with locations searched so far
+		return "", fmt.Errorf("no config file found. Searched: ./%s (could not check executable directory: %v)", configFileName, err)
+	}
+	execDir := filepath.Dir(execPath)
+	execDirConfig := filepath.Join(execDir, configFileName)
+	if _, err := os.Stat(execDirConfig); err == nil {
+		return execDirConfig, nil
 	}
 
 	// No config file found
-	return "", fmt.Errorf("no config file found. Searched: ./%s, <exec_dir>/%s", configFileName, configFileName)
+	return "", fmt.Errorf("no config file found. Searched: ./%s, %s", configFileName, execDirConfig)
 }
